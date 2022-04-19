@@ -1,0 +1,289 @@
+---
+title: "Data Analysis"
+author: "Team 7"
+date: "December 10, 2021"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(ggmap)
+library(maptools)
+library(maps)
+library(sf)
+library(stringr)
+library(stargazer)
+library(ggpubr)
+
+df <- fread("data/Attitude+Survey+for+Web+App_December+9,+2021_11.53.csv") # Change this to the most recent survey 
+
+```
+
+## Data Cleaning
+```{r}
+# removing the header
+df = df[c(-1,-2),] 
+# Renaming columns
+df <- df%>%rename(Age=`Â `,Gender=Q2,Education=Q3,subgroup = FL_49_DO)
+# Keeping only the finished surveys
+df_finished = df%>%filter(Finished == 'True') 
+# making the blank cells to be the control group
+df_finished$subgroup[df_finished$subgroup == ""] <- 'Control' 
+df_finished$group<- ifelse(grepl('^Treatment', df_finished$subgroup), 'Treatment', 'Control')
+# extract out the dollar values
+df_finished$willing_to_pay <- str_extract(df_finished$Q16, '\\$(\\d+)')
+# Remove the dollar sign
+df_finished$willing_to_pay <- (gsub("\\$", "", df_finished$willing_to_pay)) 
+# Add 0 to the NA  values
+df_finished$willing_to_pay[is.na(df_finished$willing_to_pay)] <- 0
+#Create binary outcome
+df_finished$is_willing_to_pay<- ifelse(df_finished$willing_to_pay>0,1,0)
+#Create binary indicators for age
+df_finished$equal_over35<- ifelse(df_finished$Age=="35 or more than 35",1,0)
+df_finished$equal_over30<- ifelse(df_finished$Age=="30-34" | df_finished$Age=="35 or more than 35",1,0)
+df_finished$hasGraduateDegree<- ifelse(df_finished$Education=="Master's degree, Ph.D, or higher",1,0)
+# Select just the columns needed
+df_finished <- df_finished %>% 
+              select(ResponseId,Age,Gender,Education,subgroup,group,equal_over35,
+                     equal_over30,hasGraduateDegree,willing_to_pay,is_willing_to_pay)%>%
+              mutate(willing_to_pay = as.numeric(willing_to_pay))
+```
+
+
+```{r}
+control_group = df_finished%>%filter(group == "Control")
+treatment_group = df_finished%>%filter(group == "Treatment")
+```
+## Survey Metadata
+
++ We have collected so far `r nrow(df)` surveys.
++ These include `r nrow(df_finished)` finished surveys.
++ We have `r nrow(control_group)` subjects in the control group and `r nrow(treatment_group)` subjects in the treatment groups
+
+## Where Survey Participants Are Coming From 
+
+```{r}
+map_df <- df%>%select(LocationLatitude,LocationLongitude)
+mapWorld <- borders("world", colour="gray50", fill="white")
+mp <- ggplot() + mapWorld
+mp + geom_point(data = map_df, aes(x =as.numeric(LocationLongitude), y=as.numeric(LocationLatitude)))
+  
+```
+
+## Data Exploroation 
+We collected `r nrow(df)` responses from our survey, and this included `r nrow(df_finished)` completed surveys. As you can see from the figure (map) the majority of respondents are from the United States. We also received several responses from individuals living in India.
+
+Our treatment group consisted of `r nrow(treatment_group)` subjects, and the control group had `r nrow(control_group)` subjects. Figure (figure #) shows the distribution of the treatment and control group, and figure (figure #) shows the distribution of the `r nrow(treatment_group)` treatment subjects across the three treatment groups.
+As evident from this figure, our treatment group has more subjects compared to the control group, and this was intentional and part 
+of our survey design. Since we had three sub groups within our treatment, we wanted to ensure that each of the 
+subgroups have an adequate number of subjects. 
+
+The sample we collected included `r df_finished%>%filter(Gender=='Female')%>%nrow()` female respondents, `r df_finished%>%filter(Gender=='Male')%>%nrow()` male subjects and `r df_finished%>%filter(Gender=="Non-binary / third gender")%>%nrow()` that identified as Non-binary / third gender
+
+Most of the respondents in our survey had completed a four-year college degree. In addition to that, over 50 individuals had 
+completed a Masters Degree or a Ph.D. The age distribution shown in figure (figure#) shows that a most of the subjects were between the age of 25 and 29 followed by those who are 35 or more. 
+
+
+### Distribution among Treatment Groups and Control Groups
+
+```{r}
+group_dist<- ggplot(data = df_finished)+
+  aes(x = factor(group),fill = group)+
+  geom_bar(stat = "count")+ggtitle("Subject Distribution")+xlab("Group")
+```
+
+```{r}
+subgroup_dist<- ggplot(data = df_finished)+
+  aes(x = factor(subgroup),fill = group)+
+  geom_bar(stat = "count")+ggtitle("Subject Distribution By Sub Groups")+xlab("SubGroup")
+```
+
+```{r}
+ggarrange(group_dist, subgroup_dist,
+          labels = c("A", "B"),
+          ncol = 1, nrow = 2)
+```
+
+
+
+### Demographic Distribution 
+
+#### Gender
+```{r}
+ggplot(data = df_finished)+
+aes(x = factor(df_finished$Gender),fill = Gender)+
+geom_bar(stat = "count")+ggtitle("Gender")
+```
+
+
+#### Education
+```{r}
+ggplot(data = df_finished)+
+  aes(x = factor(df_finished$Education),fill = Education)+
+  geom_bar(stat = "count")+ggtitle("Education")+coord_flip()
+```
+
+#### Age Distribution
+```{r}
+ggplot(data = df_finished)+
+  aes(x = factor(df_finished$Age),fill= Age)+
+  geom_bar(stat = "count")+ggtitle("Age")+xlab("Age Groups")
+```
+
+
+# Testing to see if there is a Association between Gender and being in the control group 
+```{r}
+# Is the Gender distribution in the treatment and control group the same or different
+# Ran a Fisher Test since the  the smallest expected frequency is lower than 5
+df <- table(df_finished$Gender, df_finished$group)
+fisher.test(df)
+# seems like there is an association between gender and being the control or treatment group
+
+```
+
+# Comparing the Control and Treatment group willingness to pay
+
+## Between The Control Group and All Treatment Groups
+```{r}
+(group_summary <- df_finished%>%
+                  group_by(group)%>%summarize(`avg willingness in dollars`=mean(willing_to_pay),
+                                              `sd willing to pay in dollars` = sd(willing_to_pay),
+                                              lower = t.test(willing_to_pay)$conf.int[1],
+                                              upper = t.test(willing_to_pay)$conf.int[2]))
+
+```
+```{r}
+# plotting the values 
+ggplot(data = group_summary,
+       aes(x=group,y=`avg willingness in dollars`,fill = group))+geom_bar(stat = 'identity')+
+       ylim(0,3)+ylab("avg willingness to pay in dollars ($)")+
+       geom_errorbar(aes(ymin=lower, ymax=upper), 
+                width=.2,                    # Width of the error bars
+                position=position_dodge(0.9))+
+       ggtitle ("Average Willingness to pay between all overall Treatment and Control")
+
+```
+
+
+
+
+
+
+
+## Betweem The Control and Treatment Sub Groups
+
+```{r}
+
+(sub_group_summary <-  df_finished%>%
+                      group_by(subgroup)%>%
+                      summarize(`avg willingness in dollars`=mean(willing_to_pay),
+                                `sd willing to pay in dollars` = sd(willing_to_pay),
+                                lower = t.test(willing_to_pay)$conf.int[1],
+                                upper = t.test(willing_to_pay)$conf.int[2]))
+
+```
+
+
+```{r}
+
+ggplot(data = sub_group_summary,
+       aes(x=subgroup,y=`avg willingness in dollars`,fill = subgroup))+geom_bar(stat = 'identity')+
+       ylim(0,3)+ylab("avg willingness to pay in dollars ($)")+
+       geom_errorbar(aes(ymin=lower, ymax=upper), 
+                width=.2,                    # Width of the error bars
+                position=position_dodge(0.9))+
+       ggtitle ("Average Willingness to pay between sub groups")
+
+```
+
+
+
+
+
+
+
+
+
+## Regression Analysis
+```{css, echo = FALSE}
+
+table, td, th {
+  border: none;
+  padding-left: 10px;
+  padding-right: 10px;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+
+```
+
+```{r, results='asis'}
+# Run basic linear models for both continuous and binary outcome
+lm.willing_to_pay <- lm(willing_to_pay ~ subgroup, data=df_finished)
+lm.is_willing_to_pay <- lm(is_willing_to_pay ~ subgroup, data = df_finished)
+
+stargazer(lm.willing_to_pay,lm.is_willing_to_pay, title = "Effect of Information Warning on Privacy",
+          align = TRUE,
+          dep.var.labels = c("Willing to pay","Is Willing to Pay"),
+          column.labels = c("(Continuous)","(Binary)"),
+          covariate.labels = c("Low Info (Treatment 1)", "Medium Info (Treatment 2)", "High Info (Treatment 3)"),
+          type = "html"
+         )
+```
+
+### Heterogeneous Treatment Effects
+```{r, results='asis'}
+# Run linear model for heterogeneous treatment effects for Age >= 35
+lm.willing_to_pay.hetero <- lm(willing_to_pay ~ subgroup + equal_over35 + subgroup:equal_over35, data=df_finished)
+lm.is_willing_to_pay.hetero <- lm(is_willing_to_pay ~ subgroup + equal_over35 + subgroup:equal_over35, data = df_finished)
+
+stargazer(lm.willing_to_pay, lm.willing_to_pay.hetero, lm.is_willing_to_pay, lm.is_willing_to_pay.hetero, title = "Effect of Information Warning on Privacy",
+          align = TRUE,
+          dep.var.labels = c("Willing to pay","Is Willing to Pay"),
+          column.labels = c("(Continuous)","(Continuous)","(Binary)","(Binary)"),
+          covariate.labels = c("Low Info (Treatment 1)", "Medium Info (Treatment 2)", "High Info (Treatment 3)",
+                               "Age 35+", "Low Info and Age 35+", "Medium Info and Age 35+", "High Info and Age 35+"),
+          type = "html"
+          )
+```
+Interaction Coefficients are not statistically significant, suggesting there are no Heterogeneous Treatment Effects
+```{r, results='asis'}
+# Run linear model for heterogeneous treatment effects for Age >= 30
+lm.willing_to_pay.hetero <- lm(willing_to_pay ~ subgroup + equal_over30 + subgroup:equal_over30, data=df_finished)
+lm.is_willing_to_pay.hetero <- lm(is_willing_to_pay ~ subgroup + equal_over30 + subgroup:equal_over30, data = df_finished)
+
+stargazer(lm.willing_to_pay, lm.willing_to_pay.hetero, lm.is_willing_to_pay, lm.is_willing_to_pay.hetero, title = "Effect of Information Warning on Privacy",
+          align = TRUE,
+          dep.var.labels = c("Willing to pay","Is Willing to Pay"),
+          column.labels = c("(Continuous)","(Continuous)","(Binary)","(Binary)"),
+          covariate.labels = c("Low Info (Treatment 1)", "Medium Info (Treatment 2)", "High Info (Treatment 3)",
+                               "Age 30+", "Low Info and Age 30+", "Medium Info and Age 30+", "High Info and Age 30+"),
+          type = "html")
+```
+Interaction Coefficients are not statistically significant, suggesting there are no Heterogeneous Treatment Effects
+```{r, results='asis'}
+# Run linear model for heterogeneous treatment effects for Graduate Degree
+lm.willing_to_pay.hetero <- lm(willing_to_pay ~ subgroup + hasGraduateDegree + subgroup:hasGraduateDegree, data=df_finished)
+lm.is_willing_to_pay.hetero <- lm(is_willing_to_pay ~ subgroup + hasGraduateDegree + subgroup:hasGraduateDegree, data = df_finished)
+
+stargazer(lm.willing_to_pay, lm.willing_to_pay.hetero, lm.is_willing_to_pay, lm.is_willing_to_pay.hetero, title = "Effect of Information Warning on Privacy",
+          align = TRUE,
+          dep.var.labels = c("Willing to pay","Is Willing to Pay"),
+          column.labels = c("(Continuous)","(Continuous)","(Binary)","(Binary)"),
+          covariate.labels = c("Low Info (Treatment 1)", "Medium Info (Treatment 2)", "High Info (Treatment 3)",
+                               "Has Graduate Degree", "Low Info and Has Graduate Degree", 
+                               "Medium Info and Has Graduate Degree", "High Info and Has Graduate Degree"),
+          type = "html")
+```
